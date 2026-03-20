@@ -1,0 +1,16 @@
+[project]
+name = "fitbit-mcp"
+version = "0.1.0"
+description = "MCP server for the Fitbit Web API"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=1.26.0,<2",
+    "httpx>=0.28.1,<0.29",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,27 @@
+services:
+  fitbit-mcp:
+    build: .
+    environment:
+      - FITBIT_CLIENT_ID=${FITBIT_CLIENT_ID}
+      - FITBIT_CLIENT_SECRET=${FITBIT_CLIENT_SECRET}
+      - SERVER_URL=${SERVER_URL}
+      - FITBIT_TOKEN_FILE=/data/.fitbit_tokens.json
+    volumes:
+      - fitbit-data:/data
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.3.0
+    command: tunnel --url http://fitbit-mcp:8000 run --token ${Cloudflare_Token}
+    depends_on:
+      - fitbit-mcp
+    restart: unless-stopped
+    volumes:
+      - ./data:/home/nonroot/.cloudflared/
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+
+volumes:
+  fitbit-data:
