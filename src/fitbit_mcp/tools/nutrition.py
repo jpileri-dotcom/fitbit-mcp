@@ -252,3 +252,15 @@ async def log_food(
         data["totalFat"] = fat_g
 
     return await client.post("/1/user/-/foods/log.json", data=data)
+
+
+@mcp.tool()
+async def delete_food_log(log_id: int) -> dict:
+    """Delete a food log entry by its log ID.
+
+    Removes a previously logged food entry from the user's food diary.
+
+    Args:
+        log_id: The food log entry ID to delete (from get_food_log results).
+    """
+    return await client.delete(f"/1/user/-/foods/log/{log_id}.json")

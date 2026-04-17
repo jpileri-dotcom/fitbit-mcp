@@ -220,5 +220,29 @@ class FitbitClient:
             logger.info(f"POST {path} {rate_info}")
         return result
 
+    async def delete(self, path: str) -> dict[str, Any]:
+        """Make an authenticated DELETE request to the Fitbit API."""
+        await self._ensure_token()
+        response = await self._client.delete(
+            path,
+            headers={"Authorization": f"Bearer {self._access_token}"},
+        )
+
+        if response.status_code == 401:
+            await self._ensure_token(force=True)
+            response = await self._client.delete(
+                path,
+                headers={"Authorization": f"Bearer {self._access_token}"},
+            )
+
+        if response.status_code == 204:
+            return {"success": True}
+
+        result = await self._handle_response(response)
+        rate_info = self._rate_limit_info(response)
+        if rate_info:
+            logger.info(f"DELETE {path} {rate_info}")
+        return result
+
     async def close(self) -> None:
         await self._client.aclose()
