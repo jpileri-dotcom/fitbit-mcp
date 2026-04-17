@@ -45,4 +45,5 @@ mcp = FastMCP(
     auth=auth_settings,
     host="0.0.0.0",
     port=8000,
+    streamable_http_path="/",
 )

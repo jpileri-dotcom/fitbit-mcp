@@ -189,5 +189,36 @@ class FitbitClient:
             logger.info(f"GET {path} {rate_info}")
         return result
 
+    async def post(
+        self, path: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Make an authenticated POST request to the Fitbit API with form-encoded data."""
+        await self._ensure_token()
+        response = await self._client.post(
+            path,
+            headers={
+                "Authorization": f"Bearer {self._access_token}",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={k: str(v) for k, v in (data or {}).items() if v is not None},
+        )
+
+        if response.status_code == 401:
+            await self._ensure_token(force=True)
+            response = await self._client.post(
+                path,
+                headers={
+                    "Authorization": f"Bearer {self._access_token}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data={k: str(v) for k, v in (data or {}).items() if v is not None},
+            )
+
+        result = await self._handle_response(response)
+        rate_info = self._rate_limit_info(response)
+        if rate_info:
+            logger.info(f"POST {path} {rate_info}")
+        return result
+
     async def close(self) -> None:
         await self._client.aclose()

@@ -8,20 +8,10 @@ services:
       - FITBIT_TOKEN_FILE=/data/.fitbit_tokens.json
     volumes:
       - fitbit-data:/data
+    ports:
+      - "8000:8000"
     restart: unless-stopped
 
-  tunnel:
-    image: cloudflare/cloudflared:2026.3.0
-    command: tunnel --url http://fitbit-mcp:8000 run --token ${Cloudflare_Token}
-    depends_on:
-      - fitbit-mcp
-    restart: unless-stopped
-    volumes:
-      - ./data:/home/nonroot/.cloudflared/
-    deploy:
-      resources:
-        limits:
-          cpus: '1'
 
 volumes:
   fitbit-data:
