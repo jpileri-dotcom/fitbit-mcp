@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import os
 import secrets
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -44,6 +46,8 @@ FITBIT_SCOPES = [
     "weight",
 ]
 
+MCP_STATE_FILE = Path(os.environ.get("FITBIT_TOKEN_FILE", "/data/.fitbit_tokens.json")).parent / "mcp_state.json"
+
 
 class FitbitOAuthProvider(
     OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]
@@ -75,6 +79,75 @@ class FitbitOAuthProvider(
         # Maps state to Fitbit PKCE code_verifier (for the Fitbit OAuth exchange)
         self._fitbit_pkce: dict[str, str] = {}
 
+        # Load persisted state from disk
+        self._load_state()
+
+    def _load_state(self) -> None:
+        """Load persisted MCP tokens and clients from disk."""
+        try:
+            if MCP_STATE_FILE.exists():
+                data = json.loads(MCP_STATE_FILE.read_text())
+                now = time.time()
+
+                for token, info in data.get("mcp_tokens", {}).items():
+                    # Skip expired access tokens
+                    if info.get("expires_at") and info["expires_at"] > now:
+                        self._mcp_tokens[token] = AccessToken(
+                            token=token,
+                            client_id=info["client_id"],
+                            scopes=info.get("scopes", []),
+                            expires_at=info.get("expires_at"),
+                        )
+
+                for token, info in data.get("mcp_refresh_tokens", {}).items():
+                    self._mcp_refresh_tokens[token] = RefreshToken(
+                        token=token,
+                        client_id=info["client_id"],
+                        scopes=info.get("scopes", []),
+                    )
+
+                for client_id, info in data.get("clients", {}).items():
+                    self._clients[client_id] = OAuthClientInformationFull(
+                        **info
+                    )
+
+                logger.info(
+                    f"Loaded MCP state: {len(self._mcp_tokens)} access tokens, "
+                    f"{len(self._mcp_refresh_tokens)} refresh tokens, "
+                    f"{len(self._clients)} clients"
+                )
+        except Exception as e:
+            logger.warning(f"Could not load MCP state: {e}")
+
+    def _save_state(self) -> None:
+        """Persist MCP tokens and clients to disk."""
+        try:
+            MCP_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "mcp_tokens": {
+                    token: {
+                        "client_id": t.client_id,
+                        "scopes": t.scopes,
+                        "expires_at": t.expires_at,
+                    }
+                    for token, t in self._mcp_tokens.items()
+                },
+                "mcp_refresh_tokens": {
+                    token: {
+                        "client_id": t.client_id,
+                        "scopes": t.scopes,
+                    }
+                    for token, t in self._mcp_refresh_tokens.items()
+                },
+                "clients": {
+                    client_id: c.model_dump(mode="json")
+                    for client_id, c in self._clients.items()
+                },
+            }
+            MCP_STATE_FILE.write_text(json.dumps(data))
+        except Exception as e:
+            logger.warning(f"Could not save MCP state: {e}")
+
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
 
@@ -85,6 +158,7 @@ class FitbitOAuthProvider(
             client_info.client_id = f"client_{secrets.token_hex(16)}"
             client_info.client_id_issued_at = int(time.time())
         self._clients[client_info.client_id] = client_info
+        self._save_state()
         logger.info(f"Registered MCP client: {client_info.client_id}")
 
     async def authorize(
@@ -235,6 +309,7 @@ class FitbitOAuthProvider(
         )
 
         del self._auth_codes[authorization_code.code]
+        self._save_state()
 
         return OAuthToken(
             access_token=mcp_token,
@@ -281,6 +356,8 @@ class FitbitOAuthProvider(
         if refresh_token.token in self._mcp_refresh_tokens:
             del self._mcp_refresh_tokens[refresh_token.token]
 
+        self._save_state()
+
         return OAuthToken(
             access_token=new_token,
             token_type="Bearer",
@@ -305,3 +382,4 @@ class FitbitOAuthProvider(
             del self._mcp_tokens[token.token]
         elif isinstance(token, RefreshToken) and token.token in self._mcp_refresh_tokens:
             del self._mcp_refresh_tokens[token.token]
+        self._save_state()
