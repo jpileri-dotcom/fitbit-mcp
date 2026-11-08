@@ -301,8 +301,8 @@ async def get_activity_log_list(after_date: str | None = None, before_date: str 
             "id": (p.get("name") or "").split("/")[-1] or None,
             "name": e.get("displayName"),
             "type": e.get("exerciseType"),
-            "start": g.civil_dt_str(iv.get("civilStartTime")),
-            "end": g.civil_dt_str(iv.get("civilEndTime")),
+            "start": g.interval_local(iv, "start"),
+            "end": g.interval_local(iv, "end"),
             "active_minutes": _mins(e.get("activeDuration")),
             "calories": _r(m.get("caloriesKcal"), 0),
             "steps": g.num(m.get("steps")),
@@ -437,9 +437,9 @@ def _sleep_row(p: dict, include_stages: bool) -> dict:
     sm = s.get("summary") or {}
     md = s.get("metadata") or {}
     row = {
-        "date_of_sleep": g.civil_date_str(iv.get("civilEndTime")),
-        "start": g.civil_dt_str(iv.get("civilStartTime")),
-        "end": g.civil_dt_str(iv.get("civilEndTime")),
+        "date_of_sleep": g.interval_local_date(iv, "end"),
+        "start": g.interval_local(iv, "start"),
+        "end": g.interval_local(iv, "end"),
         "main_sleep": md.get("mainSleep"),
         "nap": md.get("nap"),
         "type": s.get("type"),
@@ -462,7 +462,7 @@ async def _sleep(start: date, end: date, include_stages: bool) -> list[dict]:
     f = f'sleep.interval.civil_end_time >= "{start.isoformat()}" AND sleep.interval.civil_end_time < "{_next(end)}"'
 
     def keep(p):
-        ds = g.civil_date_str(((p.get("sleep") or {}).get("interval") or {}).get("civilEndTime"))
+        ds = g.interval_local_date((p.get("sleep") or {}).get("interval"), "end")
         return ds is not None and start.isoformat() <= ds <= end.isoformat()
 
     pts = await g.list_points("sleep", f, max_points=500, fallback=keep)
@@ -670,7 +670,7 @@ def _food_row(p: dict) -> dict:
         "id": (p.get("name") or "").split("/")[-1] or None,
         "food": n.get("foodDisplayName"),
         "meal": (n.get("mealType") or "").lower() or None,
-        "time": g.civil_dt_str(iv.get("civilStartTime")),
+        "time": g.interval_local(iv, "start"),
         "servings": serving.get("amount"),
         "unit": serving.get("foodMeasurementUnitDisplayName"),
         "calories": _r((n.get("energy") or {}).get("kcal"), 0),
@@ -689,7 +689,7 @@ async def _session_list(data_type: str, field: str, d: date) -> list[dict]:
     f = f'{snake}.interval.civil_start_time >= "{d.isoformat()}" AND {snake}.interval.civil_start_time < "{_next(d)}"'
 
     def keep(p):
-        return g.civil_date_str(((p.get(field) or {}).get("interval") or {}).get("civilStartTime")) == d.isoformat()
+        return g.interval_local_date((p.get(field) or {}).get("interval"), "start") == d.isoformat()
 
     return await g.list_points(data_type, f, max_points=2000, fallback=keep)
 
@@ -727,7 +727,7 @@ async def get_water_log(date: str = "today") -> dict:
         h = p.get("hydrationLog") or {}
         ml = g.num((h.get("amountConsumed") or {}).get("milliliters")) or 0
         rows.append({"id": (p.get("name") or "").split("/")[-1] or None,
-                     "time": g.civil_dt_str((h.get("interval") or {}).get("civilStartTime")), "ml": _r(ml, 0)})
+                     "time": g.interval_local(h.get("interval"), "start"), "ml": _r(ml, 0)})
     rows.sort(key=lambda r: r["time"] or "")
     total = sum(r["ml"] or 0 for r in rows)
     return {"date": d.isoformat(), "entries": rows, "total_ml": round(total), "total_fl_oz": round(total / 29.5735, 1)}

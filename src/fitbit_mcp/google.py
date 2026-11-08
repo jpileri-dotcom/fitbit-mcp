@@ -287,6 +287,33 @@ def civil_dt_str(c: dict | None) -> str | None:
     return f"{ds} {t.get('hours', 0):02d}:{t.get('minutes', 0):02d}"
 
 
+def interval_local(iv: dict | None, which: str = "start") -> str | None:
+    """Local "yyyy-MM-dd HH:MM" for an interval's start or end.
+
+    Uses civilStartTime/civilEndTime when Google sends them. Many points (for example sleep and
+    exercise synced from Fitbit or HealthKit) only carry startTime/endTime plus a UTC offset, so
+    fall back to computing local time from those.
+    """
+    iv = iv or {}
+    civil = iv.get("civilStartTime" if which == "start" else "civilEndTime")
+    if civil:
+        return civil_dt_str(civil)
+    ts = iv.get(f"{which}Time")
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    off = timedelta(seconds=_dur_seconds(iv.get(f"{which}UtcOffset") or "0s"))
+    return (dt.astimezone(timezone.utc) + off).strftime("%Y-%m-%d %H:%M")
+
+
+def interval_local_date(iv: dict | None, which: str = "start") -> str | None:
+    s = interval_local(iv, which)
+    return s[:10] if s else None
+
+
 def num(v: Any) -> float | None:
     try:
         return float(v)
