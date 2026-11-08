@@ -733,6 +733,8 @@ async def get_water_log(date: str = "today") -> dict:
     return {"date": d.isoformat(), "entries": rows, "total_ml": round(total), "total_fl_oz": round(total / 29.5735, 1)}
 
 
+SERVING_UNIT = "users/me/dataTypes/food-measurement-unit/dataPoints/304"  # "serving"
+
 NUTRIENT_ARGS = {
     "protein_g": ("PROTEIN", 1), "fiber_g": ("DIETARY_FIBER", 1), "sugar_g": ("SUGAR", 1),
     "saturated_fat_g": ("SATURATED_FAT", 1), "trans_fat_g": ("TRANS_FAT", 1),
@@ -778,7 +780,8 @@ async def log_food(food_name: str, calories: float, meal_type: Literal["breakfas
         "energy": {"kcal": round(calories, 1)},
         "totalCarbohydrate": {"grams": round(carbs_g or 0, 2)},
         "totalFat": {"grams": round(fat_g or 0, 2)},
-        "serving": {"amount": servings},
+        # The API requires a unit even for anonymous foods; 304 is the generic "serving" unit.
+        "serving": {"amount": servings, "foodMeasurementUnit": SERVING_UNIT},
     }
     vals = locals()
     nutrients = []
