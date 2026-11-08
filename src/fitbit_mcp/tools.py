@@ -276,6 +276,76 @@ async def get_azm_by_range(start_date: str, end_date: str = "today") -> dict:
     return {"data": [{"date": _rdate(p), **_azm(p)} for p in pts]}
 
 
+def _exercise_source(p: dict) -> str | None:
+    if p.get("merged_from"):
+        return p["merged_from"]
+    ds = p.get("dataSource") or {}
+    app = ds.get("application") or {}
+    return " / ".join(x for x in (ds.get("platform"), app.get("packageName")) if x) or None
+
+
+def _is_peloton(p: dict) -> bool:
+    e = p.get("exercise") or {}
+    app = (p.get("dataSource") or {}).get("application") or {}
+    return "peloton" in (e.get("displayName") or "").lower() or "peloton" in (app.get("packageName") or "").lower()
+
+
+def _iv_times(p: dict) -> tuple[datetime, datetime] | None:
+    iv = (p.get("exercise") or {}).get("interval") or {}
+    try:
+        return (datetime.fromisoformat(iv["startTime"].replace("Z", "+00:00")),
+                datetime.fromisoformat(iv["endTime"].replace("Z", "+00:00")))
+    except (KeyError, ValueError):
+        return None
+
+
+def _merge_duplicate_exercises(pts: list[dict]) -> list[dict]:
+    """Collapse Peloton workouts that arrive twice from different sources.
+
+    Peloton writes each class to Apple Health (correct start time, no metrics) and, until the Fitbit Web API
+    shutdown, also through its Fitbit link (calories and heart rate, but same length and shifted so it starts
+    when the Apple Health copy ends, or at the same time). Keep one entry: the Apple Health times plus the
+    Fitbit-link metrics.
+    """
+    tol = timedelta(minutes=2)
+    used: set[int] = set()
+    out: list[dict] = []
+    for i, a in enumerate(pts):
+        if i in used:
+            continue
+        ta = _iv_times(a)
+        match = None
+        if ta and _is_peloton(a):
+            for j in range(i + 1, len(pts)):
+                b = pts[j]
+                tb = _iv_times(b)
+                if j in used or not tb or not _is_peloton(b):
+                    continue
+                if (a.get("dataSource") or {}).get("platform") == (b.get("dataSource") or {}).get("platform"):
+                    continue
+                if abs((ta[1] - ta[0]) - (tb[1] - tb[0])) > tol:
+                    continue
+                if min(abs(ta[0] - tb[0]), abs(ta[1] - tb[0]), abs(tb[1] - ta[0])) <= tol:
+                    match = j
+                    break
+        if match is None:
+            out.append(a)
+            continue
+        used.add(match)
+        b = pts[match]
+        # Times from the copy without metrics (Apple Health); metrics from the copy that has them.
+        rich, plain = (a, b) if (a.get("exercise") or {}).get("metricsSummary") else (b, a)
+        merged = dict(plain)
+        ex = dict(plain.get("exercise") or {})
+        rx = rich.get("exercise") or {}
+        ex["metricsSummary"] = rx.get("metricsSummary") or {}
+        ex["displayName"] = rx.get("displayName") or ex.get("displayName")
+        merged["exercise"] = ex
+        merged["merged_from"] = "Peloton (merged Apple Health + Fitbit duplicates)"
+        out.append(merged)
+    return out
+
+
 @tool
 async def get_activity_log_list(after_date: str | None = None, before_date: str | None = None, limit: int = 20) -> dict:
     """List logged or auto-detected exercises (walks, runs, workouts), newest first.
@@ -290,9 +360,9 @@ async def get_activity_log_list(after_date: str | None = None, before_date: str 
     f = f'exercise.interval.civil_start_time >= "{after.isoformat()}"'
     if before_date:
         f += f' AND exercise.interval.civil_start_time < "{date.fromisoformat(before_date).isoformat()}"'
-    pts = await g.list_points("exercise", f, max_points=limit)
+    pts = await g.list_points("exercise", f, max_points=limit * 2)
     out = []
-    for p in pts:
+    for p in _merge_duplicate_exercises(pts):
         e = p.get("exercise") or {}
         iv = e.get("interval") or {}
         m = e.get("metricsSummary") or {}
@@ -310,8 +380,10 @@ async def get_activity_log_list(after_date: str | None = None, before_date: str 
             "avg_heart_rate": g.num(m.get("averageHeartRateBeatsPerMinute")),
             "active_zone_minutes": g.num(m.get("activeZoneMinutes")),
             "notes": e.get("notes"),
+            "source": _exercise_source(p),
         })
-    return {"exercises": out}
+    out.sort(key=lambda r: r["start"] or "", reverse=True)
+    return {"exercises": out[:limit]}
 
 
 # =========================================================================== heart
@@ -552,8 +624,12 @@ async def get_cardio_score_by_range(start_date: str, end_date: str = "today") ->
     """
     start, end = await _range(start_date, end_date)
     rows = await _daily_list("daily-vo2-max", "dailyVo2Max", start, end)
-    return {"data": [{"date": g.civil_date_str(r.get("date")), "vo2_max": _r(r.get("vo2Max"), 1),
-                      "level": r.get("cardioFitnessLevel"), "estimated": r.get("estimated")} for r in rows]}
+    out: dict[str, Any] = {"data": [{"date": g.civil_date_str(r.get("date")), "vo2_max": _r(r.get("vo2Max"), 1),
+                                     "level": r.get("cardioFitnessLevel"), "estimated": r.get("estimated")} for r in rows]}
+    if not rows:
+        out["note"] = ("Google Health has no cardio fitness (VO2 max) readings for these dates. This is not an "
+                       "access error: the device has not produced or synced a score for this period.")
+    return out
 
 
 # =========================================================================== body
@@ -817,6 +893,94 @@ async def log_water(amount: float, unit: Literal["fl oz", "ml", "cup"] = "fl oz"
         "interval": {"startTime": g.rfc3339(start), "startUtcOffset": off, "endTime": g.rfc3339(end), "endUtcOffset": off},
         "amountConsumed": {"milliliters": round(ml, 1), "userProvidedUnit": enum}}})
     return _op_result(op, f"Logged {amount} {unit} of water on {d.isoformat()}.")
+
+
+FOOD_PREFIX = "users/me/dataTypes/food/dataPoints/"
+UNIT_PREFIX = "users/me/dataTypes/food-measurement-unit/dataPoints/"
+
+
+def _id_of(name: str | None) -> str | None:
+    return (name or "").split("/")[-1] or None
+
+
+async def _get_food(food_id: str) -> dict:
+    food_id = food_id.strip().split("/")[-1]
+    if not food_id.isdigit():
+        raise ValueError("food_id must be a Fitbit/Google Health food ID (digits only)")
+    p = await g.request("GET", FOOD_PREFIX + food_id)
+    return p.get("food") or {}
+
+
+def _serving_row(s: dict) -> dict:
+    return {"amount": s.get("amount"), "unit": s.get("foodMeasurementUnitDisplayName"),
+            "unit_id": _id_of(s.get("foodMeasurementUnit"))}
+
+
+@tool
+async def get_food(food_id: str) -> dict:
+    """Look up a Fitbit food by its ID (the same IDs the old Fitbit app/API used, e.g. saved or favorite
+    foods): name, brand, calories and macros for the default serving, and the serving units it accepts.
+    Use the result with log_food_by_id.
+
+    Args:
+        food_id: numeric food ID.
+    """
+    f = await _get_food(food_id)
+    nutrients = {x.get("nutrient", "?").lower(): _r((x.get("quantity") or {}).get("grams"), 3)
+                 for x in f.get("nutrients", []) or []}
+    return {
+        "food_id": food_id.strip().split("/")[-1],
+        "name": (f.get("displayName") or "").strip() or None,
+        "brand": f.get("brand"),
+        "default_serving": _serving_row(f.get("defaultServing") or {}),
+        "per_default_serving": {
+            "calories": _r((f.get("energyAvg") or {}).get("kcal"), 0),
+            "carbs_g": _r((f.get("totalCarbohydrate") or {}).get("grams"), 1),
+            "fat_g": _r((f.get("totalFat") or {}).get("grams"), 1),
+            "protein_g": nutrients.get("protein"),
+            "fiber_g": nutrients.get("dietary_fiber"),
+            "sugar_g": nutrients.get("sugar"),
+            "sodium_mg": _r(nutrients["sodium"] * 1000, 0) if nutrients.get("sodium") is not None else None,
+        },
+        "servings": [_serving_row(s) for s in f.get("servings", []) or []],
+    }
+
+
+@tool
+async def log_food_by_id(food_id: str, meal_type: Literal["breakfast", "morning snack", "lunch", "afternoon snack",
+                                                           "dinner", "evening snack", "snack", "anytime"] = "anytime",
+                         amount: float | None = None, unit_id: str | None = None,
+                         date: str = "today", time: str | None = None) -> dict:
+    """Log a known Fitbit food by its food ID (e.g. a saved or favorite food). Google fills in calories and
+    nutrients from the food's record, so no macros are needed. Use get_food to see the food's servings.
+
+    Args:
+        food_id: numeric food ID.
+        meal_type: breakfast, morning snack, lunch, afternoon snack, dinner, evening snack, snack, anytime.
+        amount: how many units were eaten. Default: the food's default serving amount.
+        unit_id: serving unit ID from get_food (e.g. 304 = serving, 147 = gram). Default: the food's default unit.
+        date: yyyy-MM-dd or "today".
+        time: optional HH:mm local time. Default: now (today) or noon (other days).
+    """
+    fid = food_id.strip().split("/")[-1]
+    f = await _get_food(fid)
+    default = f.get("defaultServing") or {}
+    unit = (UNIT_PREFIX + unit_id.strip().split("/")[-1]) if unit_id else default.get("foodMeasurementUnit") or SERVING_UNIT
+    qty = amount if amount is not None else (default.get("amount") or 1)
+    if not 0 < qty <= 10000:
+        raise ValueError("amount out of range")
+    d = await g.resolve_date(date)
+    start, off = await g.local_to_utc(d, time)
+    end = start + timedelta(minutes=1)
+    log = {
+        "interval": {"startTime": g.rfc3339(start), "startUtcOffset": off, "endTime": g.rfc3339(end), "endUtcOffset": off},
+        "food": FOOD_PREFIX + fid,
+        "mealType": MEALS.get(meal_type, "ANYTIME"),
+        "serving": {"amount": qty, "foodMeasurementUnit": unit},
+    }
+    op = await g.create_point("nutrition-log", {"nutritionLog": log})
+    name = (f.get("displayName") or fid).strip()
+    return _op_result(op, f"Logged {name} ({qty:g} x unit {_id_of(unit)}) as {meal_type} on {d.isoformat()}.")
 
 
 @tool

@@ -32,9 +32,13 @@ get_profile, get_devices, get_daily_activity_summary, get_activity_timeseries_by
 get_azm_by_range, get_activity_log_list, get_heart_rate_by_range, get_heart_rate_intraday, get_hrv_by_date,
 get_hrv_by_range, get_sleep_by_date, get_sleep_by_date_range, get_spo2_by_range, get_breathing_rate_by_range,
 get_skin_temperature_by_range, get_cardio_score_by_range, get_weight_log, get_body_timeseries_by_range,
-get_food_log, get_water_log, log_food, log_water, log_weight, delete_food_log.
+get_food_log, get_water_log, log_food, get_food, log_food_by_id, log_water, log_weight, delete_food_log.
 
-Not included: `search_foods`. The API's `food` data type supports only list and get, with no search
+`get_food` and `log_food_by_id` work with Fitbit food-database IDs (the same IDs the old Fitbit API used).
+Custom foods made in the Fitbit app or by `create_food` are not exposed by the API (old logs show them as food `0`).
+`get_activity_log_list` merges Peloton classes that arrive twice (Apple Health copy + Peloton's Fitbit link copy).
+
+Not included: `search_foods` and `create_food`. The API's `food` data type supports only list and get, with no search
 parameter ([nutrition guide](https://developers.google.com/health/data-types/nutrition)). `log_food` writes an
 "anonymous food" entry with the calories and nutrients you supply. BMI is not a Google Health data type.
 
