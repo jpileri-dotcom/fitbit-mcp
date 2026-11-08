@@ -1,11 +1,12 @@
 [project]
 name = "fitbit-mcp"
-version = "0.1.0"
-description = "MCP server for the Fitbit Web API"
+version = "2.0.0"
+description = "Remote MCP server for Fitbit data via the Google Health API"
 requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=1.26.0,<2",
     "httpx>=0.28.1,<0.29",
+    "tzdata>=2024.1",
 ]
 
 [build-system]

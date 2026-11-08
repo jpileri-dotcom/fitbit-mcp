@@ -1,0 +1,85 @@
+name: Deploy to Fly.io
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+env:
+  FLY_APP: fitbit-mcp
+  FLY_REGION: iad
+  FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install . pytest
+      - run: pytest -q tests
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the GitHub secrets exist
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          MCP_PATH_SECRET: ${{ secrets.MCP_PATH_SECRET }}
+        run: |
+          missing=""
+          for v in FLY_API_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MCP_PATH_SECRET; do
+            if [ -z "${!v}" ]; then missing="$missing $v"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing GitHub Actions secrets:$missing"
+            exit 1
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create the Fly app if it does not exist
+        run: |
+          if ! flyctl status --app "$FLY_APP" >/dev/null 2>&1; then
+            flyctl apps create "$FLY_APP" --org personal
+          fi
+
+      - name: Create the data volume if it does not exist
+        run: |
+          count=$(flyctl volumes list --app "$FLY_APP" --json | jq '[.[] | select(.name=="fitbit_data")] | length')
+          if [ "$count" = "0" ]; then
+            flyctl volumes create fitbit_data --app "$FLY_APP" --region "$FLY_REGION" --size 1 --yes
+          fi
+
+      - name: Push secrets to Fly
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          MCP_PATH_SECRET: ${{ secrets.MCP_PATH_SECRET }}
+        run: |
+          flyctl secrets set --stage --app "$FLY_APP" \
+            GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID" \
+            GOOGLE_CLIENT_SECRET="$GOOGLE_CLIENT_SECRET" \
+            MCP_PATH_SECRET="$MCP_PATH_SECRET"
+
+      - name: Deploy
+        run: flyctl deploy --remote-only --app "$FLY_APP" --ha=false
+
+      - name: Check the server is up
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS "https://$FLY_APP.fly.dev/health"; then echo; exit 0; fi
+            sleep 10
+          done
+          echo "::error::Server did not answer on /health"
+          exit 1

@@ -1,49 +1,22 @@
-"""Shared application instances — imported by server.py and all tool modules."""
+"""Shared FastMCP instance. The MCP endpoint lives at /<MCP_PATH_SECRET>/mcp."""
 from __future__ import annotations
 
-import os
-
-from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.fastmcp import FastMCP
-from pydantic import AnyHttpUrl
 
-from fitbit_mcp.client import FitbitClient
-from fitbit_mcp.oauth_provider import FitbitOAuthProvider
+from fitbit_mcp import config
 
-# Initialize the Fitbit API client
-client = FitbitClient()
-
-# Server URL from environment
-server_url = os.environ.get("SERVER_URL", "http://localhost:8000")
-
-# Initialize the OAuth provider, linking it to the client for token handoff
-provider = FitbitOAuthProvider(
-    server_url=server_url,
-    on_fitbit_tokens=lambda access_token, refresh_token, expires_in: client.set_tokens(
-        access_token, refresh_token, expires_in
-    ),
-)
-
-# Configure MCP auth settings
-auth_settings = AuthSettings(
-    issuer_url=AnyHttpUrl(server_url),
-    client_registration_options=ClientRegistrationOptions(
-        enabled=True,
-        valid_scopes=["fitbit"],
-        default_scopes=["fitbit"],
-    ),
-    required_scopes=["fitbit"],
-    resource_server_url=None,  # Combined AS+RS mode
-)
-
-# Initialize the MCP server with OAuth
-# host="0.0.0.0" is required for Docker networking
 mcp = FastMCP(
-    name="Fitbit MCP Server",
-    instructions="Access Fitbit health and fitness data including activity, sleep, heart rate, and more.",
-    auth_server_provider=provider,
-    auth=auth_settings,
+    name="Fitbit (Google Health)",
+    instructions=(
+        "Read and log the user's Fitbit data through the Google Health API: activity, heart rate, HRV, sleep, "
+        "SpO2, breathing rate, skin temperature, cardio fitness, weight, food and water. Dates are yyyy-MM-dd "
+        "in the user's local time zone; 'today' is accepted. To log food, call log_food with total calories "
+        "and macros for the amount eaten (estimate if needed). If a tool returns a sign-in link, show the link "
+        "to the user."
+    ),
     host="0.0.0.0",
-    port=8000,
-    streamable_http_path="/",
+    port=config.PORT,
+    streamable_http_path=f"/{config.MCP_PATH_SECRET or 'disabled'}/mcp",
+    stateless_http=True,
+    json_response=True,
 )
